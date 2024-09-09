@@ -44,7 +44,9 @@ def ask_gpt(text):
 # Function to extract phone numbers and emails
 def find_contacts(browser_driver, site):
     # Get the page source
-    page_source = browser_driver.page_source.lower()
+    page_source = browser_driver.execute_script("""
+            return document.body.innerText;
+        """).lower()
 
     # Regex pattern for emails
     email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'
