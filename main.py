@@ -44,7 +44,11 @@ def ask_gemini(text):
     genai.configure(api_key=os.environ["GEMINI"])
     model = genai.GenerativeModel("gemini-1.5-flash")
     response = model.generate_content(text)
-    return response.text
+    try:
+        return response.text
+    except Exception as e:
+        print(e)
+        return ""
 
 
 def clean_url(src):
