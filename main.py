@@ -9,6 +9,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 import json
 import re
+from selenium.webdriver.common.by import By
 
 
 def init_web_driver():
@@ -33,11 +34,38 @@ def ask_gpt(text):
                 "content": text
             }
         ],
-        model="gpt-4o-mini-2024-07-18",
+        model="gpt-4o",
         max_tokens=500
     )
     print(f"token used: {chat_completion.usage.total_tokens}")
     return chat_completion.choices[0].message.content
+
+
+# Function to extract phone numbers and emails
+def find_contacts(browser_driver, site):
+    # Get the page source
+    page_source = browser_driver.page_source.lower()
+
+    # Regex pattern for emails
+    email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'
+    emails = re.findall(email_pattern, page_source)
+
+    # Regex pattern for phone numbers with +61 or nearby "phone", "mobile", etc.
+    phone_pattern = r'(\+61\s?\d{1,3}[\s-]?\d{1,4}[\s-]?\d{1,4})|\b(?:phone|mobile|telephone)\b.*?(\d{9,})'
+    phones = re.findall(phone_pattern, page_source, re.IGNORECASE)
+
+    # Extract 'tel' href links
+    tel_links = browser_driver.find_elements(By.CSS_SELECTOR, 'a[href^="tel:"]')
+    tel_numbers = [link.get_attribute('href').replace('tel:', '') for link in tel_links]
+
+    # Combine all phone numbers found
+    all_phones = list(set([phone for phone_group in phones for phone in phone_group if phone] + tel_numbers))
+
+    return {
+        'site': site,
+        'emails': list(set(emails)),
+        'phones': all_phones
+    }
 
 
 def ask_gemini(text):
@@ -68,7 +96,11 @@ def search_for_links(driver, url):
     driver.get(clean_url(url))
 
     # Get the HTML source of the page
-    html = driver.page_source
+    try:
+        html = driver.page_source
+    except Exception as e:
+        print(e)
+        return url
 
     # Parse the HTML using BeautifulSoup
     soup = BeautifulSoup(html, 'html.parser')
@@ -117,6 +149,27 @@ def write_to_csv(file_path, data):
         writer.writerow(data)
 
 
+def query(text, model, site):
+    if model == 'gpt':
+        answer = ask_gpt(text)
+    else:
+        answer = ask_gemini(text)
+    print(f"{site}: {answer}")
+    answer = answer.strip("```json").strip("```").strip().replace('" "', '""').replace('null', '""')
+    try:
+        # Convert the JSON string into a Python list
+        contact_info = json.loads(answer)
+
+        # Ensure it's a valid list and then write to CSV
+        if isinstance(contact_info, list) and contact_info:
+            contact_info.insert(0, site)
+            write_to_csv(write_to_path, contact_info)
+        else:
+            write_to_csv(write_to_path, [site, "", "", "", ""])
+    except json.JSONDecodeError:
+        write_to_csv(write_to_path, [site, "", "", "", ""])
+
+
 if __name__ == '__main__':
     site_list = read_csv("sites.csv")
     webdriver = init_web_driver()
@@ -133,22 +186,17 @@ if __name__ == '__main__':
         new_link = get_contact_link(site, result)
         webdriver.get(clean_url(new_link))
         web_page = webdriver.page_source
-        text = (f"'{web_page}', view these html contents, who can I contact with, if I want to buy meats? If no "
-                f"corresponding information, leave it blank. Show the result as an array, in json format: [name, "
-                f"email, phone, fax]")
-        answer = ask_gemini(text)
-        print(f"{site}: {answer}")
-        answer = answer.strip("```json").strip("```").strip().replace('" "', '""').replace('null', '""')
-        contact_list.append(answer)
-        try:
-            # Convert the JSON string into a Python list
-            contact_info = json.loads(answer)
+        print(find_contacts(webdriver, site))
 
-            # Ensure it's a valid list and then write to CSV
-            if isinstance(contact_info, list) and contact_info:
-                contact_info.insert(0, site)
-                write_to_csv(write_to_path, contact_info)
-            else:
-                write_to_csv(write_to_path, [site, "", "", "", ""])
-        except json.JSONDecodeError:
-            write_to_csv(write_to_path, [site, "", "", "", ""])
+        gemini_text = (f"'{web_page}', view these html contents, who can I contact with, if I want to buy meats? If no "
+                       f"corresponding information, leave it blank. Show the json only with format: [name, "
+                       f"email, phone, fax]")
+
+        gpt_text = (f"View {clean_url(new_link)}, who can I contact with, if I want to buy meats? If no "
+                    f"corresponding information, leave it blank. Show the json only with format: "
+                    f"[name, email, phone, fax]")
+
+        # for i in range(3):
+        #     query(gemini_text, 'gemini', site)
+
+        #query(gemini_text, 'gpt', site)
