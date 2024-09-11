@@ -10,6 +10,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 import json
 import re
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 
 def init_web_driver():
@@ -34,40 +36,152 @@ def ask_gpt(text):
                 "content": text
             }
         ],
-        model="gpt-4o",
+        model="gpt-4",
         max_tokens=500
     )
     print(f"token used: {chat_completion.usage.total_tokens}")
     return chat_completion.choices[0].message.content
 
 
-# Function to extract phone numbers and emails
+def get_context(parent_element):
+    try:
+        # Retrieve and clean up the context text
+        context_text = parent_element.get_attribute("innerText")
+        context_text = "\n".join(line.strip() for line in context_text.splitlines() if line.strip())
+        return context_text
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+
+def clear_dict(contacts_dict, depth_limit):
+    filtered_contacts = {}
+    for contact, occurrences in contacts_dict.items():
+        # Group elements by depth
+        grouped_by_depth = {}
+        for occurrence in occurrences:
+            depth = occurrence['depth']
+            if depth not in grouped_by_depth:
+                grouped_by_depth[depth] = []
+            grouped_by_depth[depth].append(occurrence['element'])
+
+        # Sort depth levels by greatest depth first
+        sorted_depths = sorted(grouped_by_depth.keys(), reverse=True)
+
+        # Collect distinct elements until we reach the nth one (defined by depth_limit)
+        distinct_elements = []
+        for depth in sorted_depths:
+            for element in grouped_by_depth[depth]:
+                if element not in distinct_elements:  # Avoid duplicates
+                    distinct_elements.append(element)
+                if len(distinct_elements) == depth_limit:
+                    # Once we have reached the depth_limit, stop
+                    filtered_contacts[contact] = {
+                        'element': distinct_elements[-1],
+                        'depth': depth
+                    }
+                    break
+            if len(distinct_elements) == depth_limit:
+                break
+
+        # If fewer distinct elements than the limit, keep the last one available
+        if len(distinct_elements) < depth_limit and distinct_elements:
+            filtered_contacts[contact] = {
+                'element': distinct_elements[-1],
+                'depth': occurrences[-1]['depth']
+            }
+
+    return filtered_contacts
+
+
+
 def find_contacts(browser_driver, site):
-    # Get the page source
-    page_source = browser_driver.execute_script("""
-            return document.body.innerText;
-        """).lower()
+    contact_list = []
 
     # Regex pattern for emails
     email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'
-    emails = re.findall(email_pattern, page_source)
+    #phone_pattern = r"\+61\s?\(?0?\d{1,2}\)?[\s.-]?\d{4}[\s.-]?\d{4}"
+    australian_phone_regex = re.compile(r'''
+    (
+        (\+61\s?\(0\)|\+61\s?|0)?
+        [\s\-\.]?
+        (\d{1,2})?
+        [\s\-\.]?
+        \d{1,4}
+        [\s\-\.]?
+        \d{3,4}
+        [\s\-\.]?
+        \d{3,4}
+    )
+    ''', re.VERBOSE)
 
-    # Regex pattern for phone numbers with +61 or nearby "phone", "mobile", etc.
-    phone_pattern = r'(\+61\s?\d{1,3}[\s-]?\d{1,4}[\s-]?\d{1,4})|\b(?:phone|mobile|telephone)\b.*?(\d{9,})'
-    phones = re.findall(phone_pattern, page_source, re.IGNORECASE)
+    elements = browser_driver.find_elements(By.XPATH, "//*")
 
-    # Extract 'tel' href links
-    tel_links = browser_driver.find_elements(By.CSS_SELECTOR, 'a[href^="tel:"]')
-    tel_numbers = [link.get_attribute('href').replace('tel:', '') for link in tel_links]
+    email_contacts = {}
+    phone_contacts = {}
 
-    # Combine all phone numbers found
-    all_phones = list(set([phone for phone_group in phones for phone in phone_group if phone] + tel_numbers))
+    for element in elements:
+        try:
+            text = element.get_attribute("innerText")
+        except Exception as e:
+            print(e)
+            continue
 
-    return {
-        'site': site,
-        'emails': list(set(emails)),
-        'phones': all_phones
-    }
+        parent_count = 0
+        current_element = element
+
+        while current_element.tag_name.lower() != 'html':
+            # Move to the parent element
+            current_element = current_element.find_element(By.XPATH, "./..")
+            parent_count += 1
+        if text and re.search(email_pattern, text):
+            emails = re.findall(email_pattern, text, re.IGNORECASE)
+            for email in emails:
+                email = str(email)
+                if email in email_contacts:
+                    email_contacts[email].append({
+                        'element': element,
+                        'depth': parent_count
+                    })
+                else:
+                    email_contacts[email] = [{
+                        'element': element,
+                        'depth': parent_count
+                    }]
+
+        if text and australian_phone_regex.search(text):
+            phones = australian_phone_regex.findall(text)
+            for phone in phones:
+                phone = str(phone)
+                print(phone)
+                if phone in phone_contacts:
+                    phone_contacts[phone].append({
+                        'element': element,
+                        'depth': parent_count
+                    })
+                else:
+                    phone_contacts[phone] = [{
+                        'element': element,
+                        'depth': parent_count
+                    }]
+    print(site, clear_dict(email_contacts, 4))
+    print(phone_contacts)
+    print(site, clear_dict(phone_contacts, 4))
+    # context = get_context(browser_driver, str(email))
+    # answer = ask_gpt(
+    #      f"\"{context}\"\nIf I want to buy beef, can I contact {email}? If so, what is their name and number? "
+    #      f"Answer by the format: [Y/N, name, number, email]. Only answer an array.")
+    # contact_list.append([site, answer])
+
+    # phones = [num for tuple in phones for num in tuple if num]
+
+    #for phone in phones:
+    #context = get_context(browser_driver, str(phone))
+    # answer = ask_gpt(f"\"{context}\"\nIf I want to buy beef, can I contact {phone}? If so, what is their name and "
+    #                  f"email? Answer by the format: [Y/N, name, email, email]. Only answer an array.")
+    # contact_list.append([site, answer])
+
+    return contact_list
 
 
 def ask_gemini(text):
@@ -94,11 +208,11 @@ def get_web_page(src, webdriver):
 
 
 def search_for_links(driver, url):
-    # Navigate to the page
-    driver.get(clean_url(url))
-
-    # Get the HTML source of the page
     try:
+        # Navigate to the page
+        driver.get(clean_url(url))
+
+        # Get the HTML source of the page
         html = driver.page_source
     except Exception as e:
         print(e)
@@ -158,6 +272,10 @@ def query(text, model, site):
         answer = ask_gemini(text)
     print(f"{site}: {answer}")
     answer = answer.strip("```json").strip("```").strip().replace('" "', '""').replace('null', '""')
+    return answer
+
+
+def append2csv(write_to_path, answer):
     try:
         # Convert the JSON string into a Python list
         contact_info = json.loads(answer)
@@ -183,22 +301,10 @@ if __name__ == '__main__':
         writer = csv.writer(file)
         writer.writerow(row)
 
-    for site in site_list:
+    for site in site_list[5:15]:
         result = search_for_links(webdriver, site)
         new_link = get_contact_link(site, result)
         webdriver.get(clean_url(new_link))
         web_page = webdriver.page_source
-        print(find_contacts(webdriver, site))
 
-        gemini_text = (f"'{web_page}', view these html contents, who can I contact with, if I want to buy meats? If no "
-                       f"corresponding information, leave it blank. Show the json only with format: [name, "
-                       f"email, phone, fax]")
-
-        gpt_text = (f"View {clean_url(new_link)}, who can I contact with, if I want to buy meats? If no "
-                    f"corresponding information, leave it blank. Show the json only with format: "
-                    f"[name, email, phone, fax]")
-
-        # for i in range(3):
-        #     query(gemini_text, 'gemini', site)
-
-        #query(gemini_text, 'gpt', site)
+        contact = find_contacts(webdriver, site)
