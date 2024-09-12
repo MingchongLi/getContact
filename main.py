@@ -36,7 +36,7 @@ def ask_gpt(text):
                 "content": text
             }
         ],
-        model="gpt-4",
+        model="gpt-4o-mini",
         max_tokens=500
     )
     print(f"token used: {chat_completion.usage.total_tokens}")
@@ -92,7 +92,6 @@ def clear_dict(contacts_dict, depth_limit):
             }
 
     return filtered_contacts
-
 
 
 def find_contacts(browser_driver, site):
@@ -152,8 +151,7 @@ def find_contacts(browser_driver, site):
         if text and australian_phone_regex.search(text):
             phones = australian_phone_regex.findall(text)
             for phone in phones:
-                phone = str(phone)
-                print(phone)
+                phone = str(phone[0]).replace('\\xa', '').strip()
                 if phone in phone_contacts:
                     phone_contacts[phone].append({
                         'element': element,
@@ -164,22 +162,20 @@ def find_contacts(browser_driver, site):
                         'element': element,
                         'depth': parent_count
                     }]
-    print(site, clear_dict(email_contacts, 4))
-    print(phone_contacts)
-    print(site, clear_dict(phone_contacts, 4))
-    # context = get_context(browser_driver, str(email))
-    # answer = ask_gpt(
-    #      f"\"{context}\"\nIf I want to buy beef, can I contact {email}? If so, what is their name and number? "
-    #      f"Answer by the format: [Y/N, name, number, email]. Only answer an array.")
-    # contact_list.append([site, answer])
-
-    # phones = [num for tuple in phones for num in tuple if num]
-
-    #for phone in phones:
-    #context = get_context(browser_driver, str(phone))
-    # answer = ask_gpt(f"\"{context}\"\nIf I want to buy beef, can I contact {phone}? If so, what is their name and "
-    #                  f"email? Answer by the format: [Y/N, name, email, email]. Only answer an array.")
-    # contact_list.append([site, answer])
+    email_contacts = clear_dict(email_contacts, 4)
+    phone_contacts = clear_dict(phone_contacts, 4)
+    for element in email_contacts:
+        context = get_context(email_contacts[element]['element'])
+        answer = ask_gpt(
+            f"\"{context}\"\nIf I want to buy beef, can I contact {element}? If so, what is their name and number? "
+            f"Answer by the format: [Y/N, name, number, email]. Only answer an array.")
+        contact_list.append([element, answer])
+    for element in phone_contacts:
+        context = get_context(phone_contacts[element]['element'])
+        answer = ask_gpt(
+            f"\"{context}\"\nIf I want to buy beef, can I contact {element}? If so, what is their name and "
+            f"email? Answer by the format: [Y/N, name, email, email]. Only answer an array.")
+        contact_list.append([element, answer])
 
     return contact_list
 
@@ -301,10 +297,12 @@ if __name__ == '__main__':
         writer = csv.writer(file)
         writer.writerow(row)
 
-    for site in site_list[5:15]:
+    for site in site_list:
         result = search_for_links(webdriver, site)
         new_link = get_contact_link(site, result)
         webdriver.get(clean_url(new_link))
         web_page = webdriver.page_source
 
         contact = find_contacts(webdriver, site)
+        for entry in contact:
+            write_to_csv(write_to_path, contact)
