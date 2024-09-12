@@ -93,6 +93,24 @@ def clear_dict(contacts_dict, depth_limit):
 
     return filtered_contacts
 
+def is_js_code(text):
+    # Define common JavaScript patterns
+    js_patterns = [
+        r'\bfunction\b', r'\bvar\b', r'\blet\b', r'\bconst\b',
+        r'\bif\b', r'\belse\b', r'\breturn\b', r'console\.log',
+        r'\bfor\b', r'\bwhile\b', r'\bdo\b', r'==', r'===', r'\('
+    ]
+
+    # Check if any of the patterns are found in the text
+    for pattern in js_patterns:
+        if re.search(pattern, text):
+            return True
+    return False
+
+# Function to check if more than 50% of the strings are JavaScript code
+def detect_js_strings(strings):
+    js_count = sum(1 for string in strings if is_js_code(string))
+    return js_count > (len(strings) / 2)
 
 def find_contacts(browser_driver, site):
     contact_list = []
@@ -166,16 +184,22 @@ def find_contacts(browser_driver, site):
     phone_contacts = clear_dict(phone_contacts, 4)
     for element in email_contacts:
         context = get_context(email_contacts[element]['element'])
-        answer = ask_gpt(
-            f"\"{context}\"\nIf I want to buy beef, can I contact {element}? If so, what is their name and number? "
-            f"Answer by the format: [Y/N, name, number, email]. Only answer an array.")
-        contact_list.append([element, answer])
+        if detect_js_strings(context):
+            contact_list.append([element, 'N'])
+        else:
+            answer = ask_gpt(
+                f"\"{context}\"\nIf I want to buy beef, can I contact {element}? If so, what is their name and number? "
+                f"Answer by the format: [Y/N, name, number, email]. Only answer an array.")
+            contact_list.append([element, answer])
     for element in phone_contacts:
         context = get_context(phone_contacts[element]['element'])
-        answer = ask_gpt(
-            f"\"{context}\"\nIf I want to buy beef, can I contact {element}? If so, what is their name and "
-            f"email? Answer by the format: [Y/N, name, email, email]. Only answer an array.")
-        contact_list.append([element, answer])
+        if detect_js_strings(context):
+            contact_list.append([element, 'N'])
+        else:
+            answer = ask_gpt(
+                f"\"{context}\"\nIf I want to buy beef, can I contact {element}? If so, what is their name and "
+                f"email? Answer by the format: [Y/N, name, email, email]. Only answer an array.")
+            contact_list.append([element, answer])
 
     return contact_list
 
@@ -292,11 +316,6 @@ if __name__ == '__main__':
     contact_list = []
 
     write_to_path = "contacts.csv"
-    row = ['site', 'name', 'email', 'phone', 'fax']
-    with open(write_to_path, mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(row)
-
     for site in site_list:
         result = search_for_links(webdriver, site)
         new_link = get_contact_link(site, result)
